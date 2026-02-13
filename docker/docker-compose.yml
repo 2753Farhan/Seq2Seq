@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  seq2seq-codegen:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: seq2seq-training
+    runtime: nvidia
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ../outputs:/app/outputs
+      - ../data:/app/data
+      - ../config:/app/config
+    command: python src/main.py --train-all --evaluate --plot --save-results
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  jupyter:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: seq2seq-jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - ../notebooks:/app/notebooks
+      - ../outputs:/app/outputs
+      - ../data:/app/data
+    command: jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''

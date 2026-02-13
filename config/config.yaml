@@ -1,0 +1,56 @@
+# Data Configuration
+data:
+  dataset_name: 'Nan-Do/code-search-net-python'  # This is now used directly
+  max_src_len: 50
+  max_tgt_len: 80
+  batch_size: 32
+  num_workers: 0  # Set to 0 for Windows to avoid multiprocessing issues
+  train_size: 8000
+  valid_size: 1000
+  test_size: 1000
+  src_max_vocab: 8000
+  tgt_max_vocab: 8000
+
+
+# Model Configuration
+model:
+  embedding_dim: 128
+  hidden_dim: 256
+  num_layers: 1
+  dropout: 0.3
+  teacher_forcing_ratio: 0.5
+  encoder_dropout: 0.3
+  decoder_dropout: 0.3
+
+# Training Configuration
+training:
+  epochs: 10
+  learning_rate: 0.001
+  clip: 1.0
+  save_checkpoints: true
+  checkpoint_dir: 'outputs/models'
+  log_interval: 100
+  early_stopping_patience: 3
+
+# Evaluation Configuration
+evaluation:
+  calculate_bleu: true
+  calculate_exact_match: true
+  save_predictions: true
+  prediction_file: 'outputs/results/predictions.txt'
+  sample_predictions: 20
+
+# Visualization Configuration
+visualization:
+  save_plots: true
+  plot_dir: 'outputs/plots'
+  attention_samples: 5
+  figure_size: [12, 8]
+  dpi: 100
+
+# Paths
+paths:
+  data_dir: 'data/'
+  model_dir: 'outputs/models/'
+  results_dir: 'outputs/results/'
+  plots_dir: 'outputs/plots/'
