@@ -7,6 +7,7 @@ Main script for Seq2Seq Code Generation Assignment
 import sys
 import os
 import argparse
+import json
 import logging
 from datetime import datetime
 
@@ -54,6 +55,80 @@ def create_directories(config):
     for d in dirs:
         os.makedirs(d, exist_ok=True)
         logger.info(f"Created directory: {d}")
+
+def load_model_with_history(model_class, encoder_class, decoder_class, model_name, 
+                            src_vocab_size, tgt_vocab_size, config, device):
+    """Load a pre-trained model and its loss history if available"""
+    
+    logger.info(f"\n{'='*50}")
+    logger.info(f"Loading {model_name}")
+    logger.info(f"{'='*50}")
+    
+    # Initialize encoder and decoder
+    if model_name == "Attention":
+        encoder = encoder_class(
+            src_vocab_size,
+            config['model']['embedding_dim'],
+            config['model']['hidden_dim'],
+            config['model']['num_layers'],
+            'bidirectional_lstm',
+            config['model']['encoder_dropout']
+        )
+        decoder = decoder_class(
+            tgt_vocab_size,
+            config['model']['embedding_dim'],
+            config['model']['hidden_dim'] * 2,  # *2 for bidirectional
+            config['model']['hidden_dim'],
+            config['model']['num_layers'],
+            config['model']['decoder_dropout']
+        )
+    else:
+        rnn_type = 'lstm' if 'LSTM' in model_name else 'rnn'
+        encoder = encoder_class(
+            src_vocab_size,
+            config['model']['embedding_dim'],
+            config['model']['hidden_dim'],
+            config['model']['num_layers'],
+            rnn_type,
+            config['model']['encoder_dropout']
+        )
+        decoder = decoder_class(
+            tgt_vocab_size,
+            config['model']['embedding_dim'],
+            config['model']['hidden_dim'],
+            config['model']['num_layers'],
+            config['model']['decoder_dropout']
+        )
+    
+    # Initialize model
+    model = model_class(encoder, decoder, device)
+    
+    # Load model weights
+    model_path = os.path.join(config['paths']['model_dir'], f'{model_name.lower().replace(" ", "_")}.pt')
+    if os.path.exists(model_path):
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        logger.info(f"Model loaded from {model_path}")
+    else:
+        logger.warning(f"Model file not found at {model_path}")
+        return None, [], []
+    
+    # Try to load loss history
+    # Try to load loss history (per-model file)
+    history_path = os.path.join(config['paths']['model_dir'], f'loss_history_{model_name.lower().replace(" ", "_")}.json')
+    train_losses = []
+    valid_losses = []
+    
+    if os.path.exists(history_path):
+        try:
+            with open(history_path, 'r') as f:
+                history = json.load(f)
+                train_losses = history.get('train_losses', [])
+                valid_losses = history.get('valid_losses', [])
+            logger.info(f"Loss history loaded from {history_path}")
+        except Exception as e:
+            logger.warning(f"Could not load loss history: {e}")
+    
+    return model, train_losses, valid_losses
 
 def train_model(model_class, encoder_class, decoder_class, model_name, 
                 src_vocab_size, tgt_vocab_size, train_loader, valid_loader, 
@@ -110,7 +185,7 @@ def train_model(model_class, encoder_class, decoder_class, model_name,
     logger.info(f"Trainable parameters: {trainable_params:,}")
     
     # Train
-    trainer = Trainer(model, train_loader, valid_loader, config, device)
+    trainer = Trainer(model, train_loader, valid_loader, config, device, model_name=model_name)
     train_losses, valid_losses = trainer.train()
     
     # Save final model
@@ -142,42 +217,86 @@ def main(args):
     
     results = {}
     
-    # Train models based on arguments
-    if args.train_all or args.model == 'vanilla':
-        model, train_losses, valid_losses = train_model(
-            VanillaSeq2Seq, EncoderRNN, VanillaDecoder,
-            "Vanilla RNN", src_vocab_size, tgt_vocab_size,
-            train_loader, valid_loader, config, device
-        )
-        results['vanilla'] = {
-            'model': model,
-            'train_losses': train_losses,
-            'valid_losses': valid_losses
-        }
+    # Skip training mode: load pre-trained models
+    if args.skip_training:
+        logger.info("\n" + "="*50)
+        logger.info("Loading Pre-trained Models (Skip Training Mode)")
+        logger.info("="*50)
+        
+        if args.train_all:
+            # Load all models
+            model_configs = [
+                (VanillaSeq2Seq, EncoderRNN, VanillaDecoder, "Vanilla RNN", 'vanilla'),
+                (LSTMSeq2Seq, EncoderRNN, LSTMDecoder, "LSTM", 'lstm'),
+                (AttentionSeq2Seq, EncoderRNN, AttentionDecoder, "Attention", 'attention')
+            ]
+            for model_class, encoder_class, decoder_class, model_name, key in model_configs:
+                model, train_losses, valid_losses = load_model_with_history(
+                    model_class, encoder_class, decoder_class, model_name, 
+                    src_vocab_size, tgt_vocab_size, config, device)
+                if model:
+                    model = model.to(device)
+                    results[key] = {
+                        'model': model,
+                        'train_losses': train_losses,
+                        'valid_losses': valid_losses
+                    }
+        elif args.model:
+            # Load specific model
+            model_map = {
+                'vanilla': (VanillaSeq2Seq, EncoderRNN, VanillaDecoder, "Vanilla RNN"),
+                'lstm': (LSTMSeq2Seq, EncoderRNN, LSTMDecoder, "LSTM"),
+                'attention': (AttentionSeq2Seq, EncoderRNN, AttentionDecoder, "Attention")
+            }
+            model_class, encoder_class, decoder_class, model_name = model_map[args.model]
+            model, train_losses, valid_losses = load_model_with_history(
+                model_class, encoder_class, decoder_class, model_name,
+                src_vocab_size, tgt_vocab_size, config, device)
+            if model:
+                model = model.to(device)
+                results[args.model] = {
+                    'model': model,
+                    'train_losses': train_losses,
+                    'valid_losses': valid_losses
+                }
     
-    if args.train_all or args.model == 'lstm':
-        model, train_losses, valid_losses = train_model(
-            LSTMSeq2Seq, EncoderRNN, LSTMDecoder,
-            "LSTM", src_vocab_size, tgt_vocab_size,
-            train_loader, valid_loader, config, device
-        )
-        results['lstm'] = {
-            'model': model,
-            'train_losses': train_losses,
-            'valid_losses': valid_losses
-        }
-    
-    if args.train_all or args.model == 'attention':
-        model, train_losses, valid_losses = train_model(
-            AttentionSeq2Seq, EncoderRNN, AttentionDecoder,
-            "Attention", src_vocab_size, tgt_vocab_size,
-            train_loader, valid_loader, config, device
-        )
-        results['attention'] = {
-            'model': model,
-            'train_losses': train_losses,
-            'valid_losses': valid_losses
-        }
+    # Training mode: train models
+    else:
+        if args.train_all or args.model == 'vanilla':
+            model, train_losses, valid_losses = train_model(
+                VanillaSeq2Seq, EncoderRNN, VanillaDecoder,
+                "Vanilla RNN", src_vocab_size, tgt_vocab_size,
+                train_loader, valid_loader, config, device
+            )
+            results['vanilla'] = {
+                'model': model,
+                'train_losses': train_losses,
+                'valid_losses': valid_losses
+            }
+        
+        if args.train_all or args.model == 'lstm':
+            model, train_losses, valid_losses = train_model(
+                LSTMSeq2Seq, EncoderRNN, LSTMDecoder,
+                "LSTM", src_vocab_size, tgt_vocab_size,
+                train_loader, valid_loader, config, device
+            )
+            results['lstm'] = {
+                'model': model,
+                'train_losses': train_losses,
+                'valid_losses': valid_losses
+            }
+        
+        if args.train_all or args.model == 'attention':
+            model, train_losses, valid_losses = train_model(
+                AttentionSeq2Seq, EncoderRNN, AttentionDecoder,
+                "Attention", src_vocab_size, tgt_vocab_size,
+                train_loader, valid_loader, config, device
+            )
+            results['attention'] = {
+                'model': model,
+                'train_losses': train_losses,
+                'valid_losses': valid_losses
+            }
     
     # Evaluate models
     if args.evaluate and results:
@@ -194,14 +313,18 @@ def main(args):
     # Generate plots
     if args.plot and results:
         logger.info("\nGenerating plots...")
-        plot_losses(results, config['paths']['plots_dir'])
+        # Only plot losses if we have training data
+        has_loss_data = any('train_losses' in result and result['train_losses'] 
+                           for result in results.values())
+        if has_loss_data:
+            plot_losses(results, config['paths']['plots_dir'])
         plot_comparison(results, config['paths']['plots_dir'])
     
     # Save results
     if args.save_results:
         results_path = os.path.join(config['paths']['results_dir'], 'results.txt')
         with open(results_path, 'w') as f:
-            f.write(f"Training completed at: {datetime.now()}\n\n")
+            f.write(f"Execution completed at: {datetime.now()}\n\n")
             for name, result in results.items():
                 f.write(f"\n{'='*50}\n")
                 f.write(f"{name.upper()} MODEL\n")
@@ -209,25 +332,27 @@ def main(args):
                 if 'metrics' in result:
                     f.write(f"BLEU Score: {result['metrics']['bleu']:.4f}\n")
                     f.write(f"Exact Match: {result['metrics']['exact_match']:.2f}%\n")
-                f.write(f"Final Train Loss: {result['train_losses'][-1]:.4f}\n")
-                f.write(f"Final Valid Loss: {result['valid_losses'][-1]:.4f}\n")
+                if 'train_losses' in result and result['train_losses']:
+                    f.write(f"Final Train Loss: {result['train_losses'][-1]:.4f}\n")
+                    f.write(f"Final Valid Loss: {result['valid_losses'][-1]:.4f}\n")
         
         logger.info(f"Results saved to {results_path}")
     
-    logger.info("\n✅ Training completed successfully!")
+    logger.info("\n✅ Execution completed successfully!")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Seq2Seq Code Generation')
     parser.add_argument('--train-all', action='store_true', help='Train all models')
     parser.add_argument('--model', type=str, choices=['vanilla', 'lstm', 'attention'], 
                        help='Train specific model')
+    parser.add_argument('--skip-training', action='store_true', help='Skip training and load pre-trained models')
     parser.add_argument('--evaluate', action='store_true', help='Evaluate models')
     parser.add_argument('--plot', action='store_true', help='Generate plots')
     parser.add_argument('--save-results', action='store_true', help='Save results to file')
     
     args = parser.parse_args()
     
-    if not (args.train_all or args.model):
+    if not (args.train_all or args.model or args.skip_training):
         parser.print_help()
     else:
         main(args)

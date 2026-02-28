@@ -4,20 +4,24 @@ import torch.optim as optim
 from tqdm import tqdm
 import time
 import os
+import json
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class Trainer:
-    def __init__(self, model, train_loader, valid_loader, config, device):
-        self.model = model
+    def __init__(self, model, train_loader, valid_loader, config, device, model_name="model"):
+        # Move model to device FIRST
+        self.model = model.to(device)
+        self.model_name = model_name
         self.train_loader = train_loader
         self.valid_loader = valid_loader
         self.config = config
         self.device = device
         
-        self.optimizer = optim.Adam(model.parameters(), lr=config['training']['learning_rate'])
+        # Now create optimizer (uses self.model.parameters())
+        self.optimizer = optim.Adam(self.model.parameters(), lr=config['training']['learning_rate'])
         self.criterion = nn.CrossEntropyLoss(ignore_index=0)
         self.clip = config['training']['clip']
         
@@ -44,6 +48,9 @@ class Trainer:
             if self.config['training']['save_checkpoints']:
                 self._save_checkpoint(epoch)
         
+        # Save loss history after training
+        self._save_loss_history(self.model_name)
+                        
         return self.train_losses, self.valid_losses
     
     def _train_epoch(self, epoch):
@@ -102,3 +109,18 @@ class Trainer:
             'train_loss': self.train_losses[-1],
             'valid_loss': self.valid_losses[-1],
         }, checkpoint_path)
+    
+    def _save_loss_history(self, model_name="model"):
+        loss_history = {
+            'train_losses': self.train_losses,
+            'valid_losses': self.valid_losses
+        }
+        
+        model_dir = self.config['paths']['model_dir']
+        os.makedirs(model_dir, exist_ok=True)
+        
+        history_path = os.path.join(model_dir, f'loss_history_{model_name.lower().replace(" ", "_")}.json')
+        with open(history_path, 'w') as f:
+            json.dump(loss_history, f)
+        
+        logger.info(f"Loss history saved to {history_path}")

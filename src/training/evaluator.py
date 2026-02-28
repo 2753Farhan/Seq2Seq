@@ -3,6 +3,9 @@ import numpy as np
 from tqdm import tqdm
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 import logging
+import ast
+import csv
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -15,7 +18,12 @@ class Evaluator:
         self.device = device
         self.smoothie = SmoothingFunction().method4
     
-    def evaluate(self, model, model_name=""):
+    def evaluate(self, model, model_name="", save_predictions=True):
+        """
+        Evaluate model; saves a per-sample CSV containing src, reference, prediction,
+        BLEU and syntax-valid flag when `save_predictions` is True.
+        """
+        model = model.to(self.device)
         model.eval()
         
         bleu_scores = []
@@ -23,22 +31,30 @@ class Evaluator:
         total = 0
         all_predictions = []
         all_references = []
+        syntax_ok_count = 0
+        
+        out_rows = []
+        out_dir = 'outputs/results'
+        os.makedirs(out_dir, exist_ok=True)
+        out_csv = os.path.join(out_dir, f'predictions_eval_{model_name.lower()}.csv')
         
         with torch.no_grad():
             for src, tgt in tqdm(self.test_loader, desc="Evaluating"):
                 src, tgt = src.to(self.device), tgt.to(self.device)
                 
                 if "Attention" in str(type(model)):
-                    output, attentions = model(src, tgt[:, :-1], teacher_forcing_ratio=0, return_attention=True)
+                    output, _ = model(src, tgt, teacher_forcing_ratio=0, return_attention=True)
                 else:
-                    output = model(src, tgt[:, :-1], teacher_forcing_ratio=0)
+                    output = model(src, tgt, teacher_forcing_ratio=0)
                 
                 predictions = output.argmax(2)
                 
                 for i in range(len(src)):
+                    # reference indices include tokens after <sos>
                     ref_indices = tgt[i, 1:].cpu()
                     pred_indices = predictions[i].cpu()
                     
+                    # strip pads and eos
                     ref_indices = ref_indices[ref_indices != self.tgt_tokenizer.word2idx['<pad>']]
                     ref_indices = ref_indices[ref_indices != self.tgt_tokenizer.word2idx['<eos>']]
                     
@@ -54,24 +70,55 @@ class Evaluator:
                     bleu = self._calculate_bleu(reference, prediction)
                     bleu_scores.append(bleu)
                     
+                    # syntax validity
+                    syntax_ok = False
+                    try:
+                        ast.parse(prediction)
+                        syntax_ok = True
+                    except Exception:
+                        syntax_ok = False
+                    if syntax_ok:
+                        syntax_ok_count += 1
+                    
                     if reference.strip() == prediction.strip():
                         exact_matches += 1
                     
                     total += 1
+                    
+                    out_rows.append({
+                        'src': None,
+                        'reference': reference,
+                        'prediction': prediction,
+                        'bleu': bleu,
+                        'syntax_ok': syntax_ok
+                    })
+        
+        # save CSV if requested
+        if save_predictions:
+            # write without src text to avoid huge CSV; user can generate sample CSV separately
+            with open(out_csv, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['reference', 'prediction', 'bleu', 'syntax_ok'])
+                for r in out_rows:
+                    writer.writerow([r['reference'], r['prediction'], f"{r['bleu']:.4f}", int(r['syntax_ok'])])
+            logger.info(f"Saved predictions to {out_csv}")
         
         avg_bleu = np.mean(bleu_scores) if bleu_scores else 0
         exact_match_accuracy = exact_matches / total * 100 if total > 0 else 0
+        syntax_valid_pct = syntax_ok_count / total * 100 if total > 0 else 0
         
         logger.info(f"\n{'='*50}")
         logger.info(f"Evaluation Results for {model_name}")
         logger.info(f"{'='*50}")
         logger.info(f"Average BLEU Score: {avg_bleu:.4f}")
         logger.info(f"Exact Match Accuracy: {exact_match_accuracy:.2f}%")
+        logger.info(f"Syntax-valid predictions: {syntax_valid_pct:.2f}% ({syntax_ok_count}/{total})")
         logger.info(f"Total examples: {total}")
         
         return {
             'bleu': avg_bleu,
             'exact_match': exact_match_accuracy,
+            'syntax_valid_pct': syntax_valid_pct,
             'predictions': all_predictions[:20],
             'references': all_references[:20],
             'bleu_scores': bleu_scores
@@ -84,4 +131,7 @@ class Evaluator:
         if len(hyp_tokens) == 0:
             return 0.0
         
-        return sentence_bleu([ref_tokens], hyp_tokens, smoothing_function=self.smoothie)
+        try:
+            return sentence_bleu([ref_tokens], hyp_tokens, smoothing_function=self.smoothie)
+        except Exception:
+            return 0.0

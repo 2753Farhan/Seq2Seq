@@ -15,7 +15,7 @@ def plot_losses(results, save_dir='outputs/plots/'):
     
     plt.subplot(1, 2, 1)
     for model_name, result in results.items():
-        if 'train_losses' in result:
+        if 'train_losses' in result and result['train_losses']:
             plt.plot(result['train_losses'], label=f'{model_name}', color=colors.get(model_name, 'black'))
     plt.xlabel('Epoch')
     plt.ylabel('Training Loss')
@@ -25,7 +25,7 @@ def plot_losses(results, save_dir='outputs/plots/'):
     
     plt.subplot(1, 2, 2)
     for model_name, result in results.items():
-        if 'valid_losses' in result:
+        if 'valid_losses' in result and result['valid_losses']:
             plt.plot(result['valid_losses'], label=f'{model_name}', color=colors.get(model_name, 'black'))
     plt.xlabel('Epoch')
     plt.ylabel('Validation Loss')
@@ -37,27 +37,89 @@ def plot_losses(results, save_dir='outputs/plots/'):
     plt.savefig(os.path.join(save_dir, 'loss_comparison.png'), dpi=100, bbox_inches='tight')
     plt.show()
 
-def plot_attention(attention_weights, src_tokens, tgt_tokens, save_path=None):
-    plt.figure(figsize=(12, 8))
-    
+def plot_attention(attention_weights, src_tokens, tgt_tokens, save_path=None, max_ticks=30):
+    """
+    Clean attention heatmap:
+    - sanitize/truncate tokens
+    - show at most `max_ticks` labels per axis (skip others)
+    - auto-resize figure height based on target length
+    """
+    import math
+    plt.close('all')
+
     if hasattr(attention_weights, 'cpu'):
         attention_weights = attention_weights.cpu().numpy()
-    
-    sns.heatmap(attention_weights, 
-                xticklabels=src_tokens, 
-                yticklabels=tgt_tokens,
-                cmap='Blues', 
-                cbar_kws={'label': 'Attention Weight'})
-    
+
+    # Ensure 2D (tgt_len, src_len)
+    att = attention_weights
+    if att.ndim != 2:
+        att = att.reshape(att.shape[0], -1)
+
+    src_len = att.shape[1]
+    tgt_len = att.shape[0]
+
+    def sanitize(tokens, max_len=25):
+        out = []
+        for t in tokens:
+            if t is None:
+                s = "<unk>"
+            else:
+                s = str(t)
+            s = s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+            s = " ".join(s.split())  # collapse whitespace
+            if len(s) > max_len:
+                s = s[:max_len-3] + "..."
+            out.append(s if s else "<unk>")
+        return out
+
+    src_labels = sanitize(src_tokens)
+    tgt_labels = sanitize(tgt_tokens)
+
+    # fallback if lengths mismatch
+    if len(src_labels) != src_len:
+        src_labels = [f"s{i}" for i in range(src_len)]
+    if len(tgt_labels) != tgt_len:
+        tgt_labels = [f"t{i}" for i in range(tgt_len)]
+
+    def make_tick_labels(labels, max_ticks):
+        n = len(labels)
+        if n <= max_ticks:
+            ticks = list(range(n))
+            lab = labels
+        else:
+            step = math.ceil(n / max_ticks)
+            ticks = list(range(0, n, step))
+            if ticks[-1] != n - 1:
+                ticks.append(n - 1)
+            lab = ['' for _ in range(n)]
+            for i in ticks:
+                lab[i] = labels[i]
+        return ticks, lab
+
+    x_ticks, x_labels_full = make_tick_labels(src_labels, max_ticks)
+    y_ticks, y_labels_full = make_tick_labels(tgt_labels, max_ticks)
+
+    width = max(10, min(20, src_len * 0.15))
+    height = max(6, min(40, tgt_len * 0.22))
+    plt.figure(figsize=(width, height))
+
+    sns.heatmap(att, xticklabels=x_labels_full, yticklabels=y_labels_full,
+                cmap='Blues', cbar_kws={'label': 'Attention Weight'},
+                square=False)
+
     plt.xlabel('Source Tokens (Docstring)')
     plt.ylabel('Target Tokens (Code)')
     plt.title('Attention Weights Visualization')
-    plt.xticks(rotation=45, ha='right')
-    plt.yticks(rotation=0)
-    
+
+    ax = plt.gca()
+    ax.set_xticks(x_ticks)
+    ax.set_xticklabels([src_labels[i] if src_labels[i] else '' for i in x_ticks], rotation=45, ha='right', fontsize=8)
+    ax.set_yticks(y_ticks)
+    ax.set_yticklabels([tgt_labels[i] if tgt_labels[i] else '' for i in y_ticks], rotation=0, fontsize=8)
+
+    plt.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=100, bbox_inches='tight')
-    
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.show()
 
 def plot_comparison(results, save_dir='outputs/plots/'):
