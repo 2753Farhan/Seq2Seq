@@ -53,3 +53,7 @@ Thumbs.db
 # Config
 *.conf
 config.local.yaml
+
+
+code_extract.txt
+extract_code.py

@@ -3,7 +3,6 @@
 Main script for Seq2Seq Code Generation Assignment
 """
 
-# First, import standard library modules
 import sys
 import os
 import argparse
@@ -11,14 +10,11 @@ import json
 import logging
 from datetime import datetime
 
-# Add the project root to Python path (after importing sys)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Now import third-party libraries
 import torch
 import yaml
 
-# Finally, import your local modules
 from src.data.dataset import create_dataloaders
 from src.models.encoder import EncoderRNN
 from src.models.vanilla_rnn import VanillaDecoder, VanillaSeq2Seq
@@ -26,9 +22,8 @@ from src.models.lstm import LSTMDecoder, LSTMSeq2Seq
 from src.models.attention import AttentionDecoder, AttentionSeq2Seq
 from src.training.trainer import Trainer
 from src.training.evaluator import Evaluator
-from src.utils.visualization import plot_losses, plot_comparison
+from src.utils.visualization import plot_losses, plot_comparison, plot_verified_attention
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -113,7 +108,6 @@ def load_model_with_history(model_class, encoder_class, decoder_class, model_nam
         return None, [], []
     
     # Try to load loss history
-    # Try to load loss history (per-model file)
     history_path = os.path.join(config['paths']['model_dir'], f'loss_history_{model_name.lower().replace(" ", "_")}.json')
     train_losses = []
     valid_losses = []
@@ -194,6 +188,46 @@ def train_model(model_class, encoder_class, decoder_class, model_name,
     logger.info(f"Model saved to {model_path}")
     
     return model, train_losses, valid_losses
+
+def generate_attention_visualizations(model, test_loader, src_tokenizer, tgt_tokenizer, device, config):
+    """Generate verified attention visualizations"""
+    
+    logger.info("\n" + "="*50)
+    logger.info("Generating Verified Attention Visualizations")
+    logger.info("="*50)
+    
+    verification_log = plot_verified_attention(
+        model=model,
+        test_loader=test_loader,
+        src_tokenizer=src_tokenizer,
+        tgt_tokenizer=tgt_tokenizer,
+        device=device,
+        save_dir=config['paths']['plots_dir']
+    )
+    
+    # Print summary for report
+    logger.info("\n📋 ATTENTION EXAMPLES FOR REPORT:")
+    for item in verification_log:
+        logger.info(f"\nExample {item['example']}:")
+        logger.info(f"  Source: {item['source']}")
+        logger.info(f"  Target: {item['target']}")
+        logger.info(f"  Source Tokens: {item['source_tokens']}")
+        logger.info(f"  Target Tokens: {item['target_tokens']}")
+    
+    # Also save a readable version for the report
+    report_attention_path = os.path.join(config['paths']['results_dir'], 'attention_examples.txt')
+    with open(report_attention_path, 'w', encoding='utf-8') as f:
+        f.write("ATTENTION EXAMPLES FOR REPORT\n")
+        f.write("="*60 + "\n\n")
+        for item in verification_log:
+            f.write(f"EXAMPLE {item['example']}:\n")
+            f.write(f"Source: {item['source']}\n")
+            f.write(f"Target: {item['target']}\n")
+            f.write(f"Source Tokens: {item['source_tokens']}\n")
+            f.write(f"Target Tokens: {item['target_tokens']}\n")
+            f.write("-"*60 + "\n\n")
+    
+    logger.info(f"\n📝 Report-ready attention examples saved to {report_attention_path}")
 
 def main(args):
     """Main function"""
@@ -310,6 +344,17 @@ def main(args):
             metrics = evaluator.evaluate(result['model'], name)
             result['metrics'] = metrics
     
+    # Generate attention visualizations for attention model (if plot flag is set)
+    if args.plot and 'attention' in results:
+        generate_attention_visualizations(
+            model=results['attention']['model'],
+            test_loader=test_loader,
+            src_tokenizer=src_tokenizer,
+            tgt_tokenizer=tgt_tokenizer,
+            device=device,
+            config=config
+        )
+    
     # Generate plots
     if args.plot and results:
         logger.info("\nGenerating plots...")
@@ -331,12 +376,23 @@ def main(args):
                 f.write(f"{'='*50}\n")
                 if 'metrics' in result:
                     f.write(f"BLEU Score: {result['metrics']['bleu']:.4f}\n")
+                    f.write(f"Token Accuracy: {result['metrics']['token_accuracy']:.4f}\n")
                     f.write(f"Exact Match: {result['metrics']['exact_match']:.2f}%\n")
+                    f.write(f"Syntax Valid: {result['metrics']['syntax_valid_pct']:.2f}%\n")
                 if 'train_losses' in result and result['train_losses']:
                     f.write(f"Final Train Loss: {result['train_losses'][-1]:.4f}\n")
                     f.write(f"Final Valid Loss: {result['valid_losses'][-1]:.4f}\n")
         
         logger.info(f"Results saved to {results_path}")
+        
+        # Save metrics in JSON format for easy analysis
+        metrics_path = os.path.join(config['paths']['results_dir'], 'metrics.json')
+        metrics_dict = {}
+        for name, result in results.items():
+            if 'metrics' in result:
+                metrics_dict[name] = result['metrics']
+        with open(metrics_path, 'w') as f:
+            json.dump(metrics_dict, f, indent=2)
     
     logger.info("\n✅ Execution completed successfully!")
 
