@@ -1,6 +1,5 @@
 # **📘 README.md - Complete Guide**
 
-```markdown
 # Seq2Seq Text-to-Python Code Generation
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
@@ -25,7 +24,6 @@ This project implements and compares three Sequence-to-Sequence (Seq2Seq) models
 - Max docstring length: 50 tokens
 - Max code length: 80 tokens
 
----
 
 ## 🚀 **Quick Start (5 Minutes)**
 
